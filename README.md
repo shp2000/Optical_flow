@@ -84,16 +84,23 @@ The runner finds the eight labeled `frame10.png` → `frame11.png` pairs using t
 python -m optical_flow.benchmark --data-dir downloads/middlebury
 ```
 
-The installed command is `optical-flow-benchmark`. The default run compares
-single-scale Lucas–Kanade (`lk-single`, one refinement), pyramidal
-Lucas–Kanade (`lk-pyramid`), and OpenCV Farnebäck (`farneback`). Use `--methods`
-to select methods, `--levels`, `--iterations`, and `--window-size` to tune
-Lucas–Kanade, or `--limit` for a quick run on the first few pairs.
+The installed command is `optical-flow-benchmark`. The default comparison runs
+original Lucas–Kanade (`lk-original`), optimized pyramidal Lucas–Kanade
+(`lk-pyramid`), and OpenCV Farnebäck (`farneback`). [OpenCV optical flow](https://docs.opencv.org/4.10.0/d4/dee/tutorial_optical_flow.html)
+
+Original Lucas–Kanade uses the per-pixel least-squares solver and a 5×5 window.
+For two-frame input, it evaluates the original spatial derivative kernels at
+the frame midpoint and uses a spatially smoothed frame difference for the
+temporal derivative. Use `--methods` to select methods, including the optional
+vectorized single-scale Lucas–Kanade (`lk-single`). The `--levels`,
+`--iterations`, and `--window-size` flags tune the optimized solver.
+Use `--limit 1 --repeats 1` for a quick comparison.
 
 The output directory defaults to `outputs/benchmark` and contains:
 
 - `summary.json` with aggregate results and run settings.
 - `per_pair.csv` with accuracy, runtime, and FPS for each pair and method.
+- `comparison.md` with a Markdown table of EPE, runtime, FPS, and dense output.
 - `accuracy_vs_speed.png` with EPE, angular error, and bad-pixel rate plotted
   against FPS for each method.
 
@@ -108,7 +115,8 @@ Runtime is the sum of the mean estimate time for each pair (`--repeats`, default
 per pair) divided by that runtime. Timing excludes file decoding, scoring, and
 report generation. Peak RSS in MiB is the highest resident memory of each method's
 dedicated process. It includes the runtime libraries, decoded frames, and
-estimator allocations. OpenCV uses one thread per estimator process.
+estimator allocations. All methods run on CPU. OpenCV and PyTorch each use one
+thread per estimator process.
 
 For [MPI Sintel](https://sintel.is.tue.mpg.de/downloads), extract the training
 images and ground-truth archives to a common root. The runner reads the selected
@@ -117,6 +125,19 @@ pixels are excluded from accuracy metrics.
 
 ```bash
 python -m optical_flow.benchmark --dataset sintel --sintel-pass final --data-dir downloads/sintel --output-dir outputs/sintel-final
+```
+
+### Optional pretrained RAFT
+
+Install the `raft` extra and add `raft-small` or `raft-large` to `--methods`.
+Torchvision downloads the selected `C_T_V2` weights on first use. Both variants
+were pretrained on FlyingChairs and FlyingThings3D. Model loading and weight
+downloads are outside timed runs. Use the Middlebury color archive for RGB input.
+[Torchvision RAFT](https://docs.pytorch.org/vision/stable/models/raft.html)
+
+```bash
+python -m pip install -e ".[raft]"
+python -m optical_flow.benchmark --data-dir downloads/middlebury --methods lk-original lk-pyramid farneback raft-small --limit 1 --repeats 1
 ```
 
 ## Example results

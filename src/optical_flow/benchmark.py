@@ -9,17 +9,36 @@ import math
 import multiprocessing as mp
 import sys
 from dataclasses import dataclass
+from functools import partial
+from importlib.util import find_spec
 from multiprocessing.connection import Connection
 from pathlib import Path
 from time import perf_counter
 
 import cv2
 import numpy as np
+from scipy.ndimage import convolve1d
 
-from .benchmark_data import FlowPair, list_pairs, read_flo, read_grayscale
+from .benchmark_data import FlowPair, list_pairs, read_flo, read_grayscale, read_rgb
+from .benchmark_raft import (
+    RAFT_INSTALL,
+    RAFT_METHODS,
+    RAFT_SETTINGS,
+    build_raft_estimator,
+)
+from .compute_flow import flow_lk
+from .compute_grad import KERNEL_G, compute_Ix, compute_Iy
 from .improved_compute_flow import flow_lk_pyramid
 
-METHODS = ("lk-single", "lk-pyramid", "farneback")
+DEFAULT_METHODS = ("lk-original", "lk-pyramid", "farneback")
+METHOD_LABELS = {
+    "lk-original": "Original Lucas–Kanade",
+    "lk-pyramid": "Optimized pyramidal Lucas–Kanade",
+    "farneback": "OpenCV Farnebäck",
+    "lk-single": "Vectorized single-scale Lucas–Kanade",
+    "raft-small": "RAFT Small",
+    "raft-large": "RAFT Large",
+}
 FARNEBACK = {
     "pyr_scale": 0.5,
     "levels": 4,
@@ -132,7 +151,18 @@ def _estimate(
 ) -> np.ndarray:
     if method == "farneback":
         return cv2.calcOpticalFlowFarneback(first, second, None, **settings)
-    flow, _ = flow_lk_pyramid(first, second, **settings)
+    if method == "lk-original":
+        first = first.astype(np.float64)
+        # Labeled pairs provide two frames. Use the original spatial kernels at
+        # their midpoint and a spatially smoothed one-frame temporal difference.
+        midpoint = (0.5 * (first + second))[..., None]
+        ix = compute_Ix(midpoint)[..., 0]
+        iy = compute_Iy(midpoint)[..., 0]
+        it = convolve1d(second - first, KERNEL_G, axis=0)
+        it = convolve1d(it, KERNEL_G, axis=1)
+        flow, _ = flow_lk(ix, iy, it, **settings)
+    else:
+        flow, _ = flow_lk_pyramid(first, second, **settings)
     return flow
 
 
@@ -146,25 +176,32 @@ def _estimate_pairs(
     # peak memory excludes scoring, and scoring does not compete for CPU time.
     with connection:
         cv2.setNumThreads(1)
+        uses_raft = method in RAFT_METHODS
+        read_frame = read_rgb if uses_raft else read_grayscale
         needs_warmup = True
         while (pair := connection.recv()) is not None:
             try:
-                first = read_grayscale(pair.first)
-                second = read_grayscale(pair.second)
+                first = read_frame(pair.first)
+                second = read_frame(pair.second)
                 if first.shape != second.shape:
                     raise ValueError(
                         f"Frame dimensions differ: {first.shape} and {second.shape}"
                     )
                 if needs_warmup:
-                    _estimate(method, first, second, settings)
+                    estimate = (
+                        build_raft_estimator(method, **settings)
+                        if uses_raft
+                        else partial(_estimate, method, settings=settings)
+                    )
+                    estimate(first, second)
                     needs_warmup = False
                 started = perf_counter()
                 for _ in range(repeats - 1):
-                    _estimate(method, first, second, settings)
-                flow = _estimate(method, first, second, settings)
+                    estimate(first, second)
+                flow = estimate(first, second)
                 seconds = (perf_counter() - started) / repeats
                 peak_mib = _peak_rss_bytes() / MIB
-            except (OSError, ValueError, cv2.error) as error:
+            except (OSError, RuntimeError, ValueError, cv2.error) as error:
                 connection.send((str(error), None))
                 return
             connection.send((None, (seconds, peak_mib, flow.shape, flow.dtype.str)))
@@ -240,12 +277,31 @@ def _benchmark_method(
     runtime = sum(row["runtime_seconds"] for row in rows)
     return {
         "method": method,
+        "dense": True,
         "parameters": settings,
         **total.averages(),
         "runtime_seconds": runtime,
         "fps": len(rows) / runtime,
         "peak_rss_mib": peak_mib,
     }, rows
+
+
+def _write_comparison(path: Path, title: str, methods: list[dict]) -> None:
+    lines = [
+        f"# {title}",
+        "",
+        "| Method | EPE ↓ (px) | Runtime ↓ (s) | FPS ↑ | Dense |",
+        "| --- | ---: | ---: | ---: | --- |",
+    ]
+    for result in methods:
+        epe = result["mean_epe_px"]
+        error = f"{epe:.3f}" if epe is not None else "n/a"
+        dense = "Yes" if result["dense"] else "No"
+        lines.append(
+            f"| {METHOD_LABELS[result['method']]} | {error} | "
+            f"{result['runtime_seconds']:.3f} | {result['fps']:.3f} | {dense} |"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_chart(
@@ -290,7 +346,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sintel-pass", choices=("clean", "final"), default="clean")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/benchmark"))
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=METHODS)
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        choices=tuple(METHOD_LABELS),
+        default=DEFAULT_METHODS,
+        help="estimators to compare (default: lk-original lk-pyramid farneback)",
+    )
     parser.add_argument(
         "--bad-threshold",
         type=float,
@@ -310,7 +372,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--iterations", type=int, default=3, help="refinements per level for lk-pyramid"
     )
     parser.add_argument(
-        "--window-size", type=int, default=7, help="odd Lucas–Kanade window size"
+        "--window-size",
+        type=int,
+        default=7,
+        help="odd vectorized Lucas–Kanade window size",
     )
     return parser
 
@@ -326,8 +391,13 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--repeats, --levels, --iterations, and --limit must be positive")
     if args.window_size < 3 or args.window_size % 2 == 0:
         parser.error("--window-size must be an odd integer of at least 3")
+    if any(method in RAFT_METHODS for method in args.methods) and any(
+        find_spec(dependency) is None for dependency in ("torch", "torchvision")
+    ):
+        parser.error(RAFT_INSTALL)
 
     settings = {
+        "lk-original": {"size": 5},
         "lk-single": {"levels": 1, "iterations": 1, "window_size": args.window_size},
         "lk-pyramid": {
             "levels": args.levels,
@@ -335,6 +405,7 @@ def main(argv: list[str] | None = None) -> None:
             "window_size": args.window_size,
         },
         "farneback": FARNEBACK,
+        **dict.fromkeys(RAFT_METHODS, RAFT_SETTINGS),
     }
     try:
         pairs = list_pairs(args.data_dir, args.dataset, args.sintel_pass)[: args.limit]
@@ -356,6 +427,7 @@ def main(argv: list[str] | None = None) -> None:
             "pairs": len(pairs),
             "bad_threshold_px": args.bad_threshold,
             "timed_repeats": args.repeats,
+            "device": "cpu",
             "opencv_threads": 1,
             "opencv_version": cv2.__version__,
             "numpy_version": np.__version__,
@@ -375,9 +447,11 @@ def main(argv: list[str] | None = None) -> None:
             if args.dataset == "middlebury"
             else f"MPI Sintel training ({args.sintel_pass})"
         )
+        title = f"{title} · {len(pairs)} {'pair' if len(pairs) == 1 else 'pairs'}"
+        _write_comparison(output / "comparison.md", title, summary)
         _write_chart(
             output / "accuracy_vs_speed.png",
-            f"{title} · {len(pairs)} pairs",
+            title,
             summary,
             args.bad_threshold,
         )

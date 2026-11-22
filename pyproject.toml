@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+raft = ["torch>=2", "torchvision>=0.15"]
 
 [project.scripts]
 optical-flow = "optical_flow.cli:main"

@@ -88,8 +88,6 @@ def test_middlebury_cli_writes_pixel_weighted_accuracy_and_performance_reports(
             str(tmp_path),
             "--output-dir",
             str(output),
-            "--methods",
-            "lk-single",
             "--repeats",
             "1",
         ],
@@ -100,17 +98,28 @@ def test_middlebury_cli_writes_pixel_weighted_accuracy_and_performance_reports(
     )
     assert completed.returncode == 0, completed.stderr
     metadata = json.loads((output / "summary.json").read_text(encoding="utf-8"))
-    [summary] = metadata["methods"]
     assert metadata["pairs"] == 2
-    assert summary["valid_pixels"] == image.size + 1
-    assert summary["mean_epe_px"] == pytest.approx(5 / summary["valid_pixels"])
-    assert summary["bad_pixel_pct"] == pytest.approx(100 / summary["valid_pixels"])
-    assert summary["peak_rss_mib"] > 0
-    assert summary["fps"] == pytest.approx(2 / summary["runtime_seconds"])
+    methods = [summary["method"] for summary in metadata["methods"]]
+    assert methods == ["lk-original", "lk-pyramid", "farneback"]
+    for summary in metadata["methods"]:
+        assert summary["dense"] is True
+        assert summary["valid_pixels"] == image.size + 1
+        assert summary["mean_epe_px"] == pytest.approx(5 / summary["valid_pixels"])
+        assert summary["bad_pixel_pct"] == pytest.approx(100 / summary["valid_pixels"])
+        assert summary["peak_rss_mib"] > 0
+        assert summary["fps"] == pytest.approx(2 / summary["runtime_seconds"])
     with (output / "per_pair.csv").open(encoding="utf-8", newline="") as stream:
         rows = list(csv.DictReader(stream))
-    assert [row["pair"] for row in rows] == ["scene_A", "scene_B"]
-    assert [float(row["mean_epe_px"]) for row in rows] == [0, 5]
+    assert [(row["method"], row["pair"]) for row in rows] == [
+        (method, scene) for method in methods for scene in ("scene_A", "scene_B")
+    ]
+    assert [float(row["mean_epe_px"]) for row in rows] == [0, 5] * len(methods)
     assert (
         (output / "accuracy_vs_speed.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
     )
+    table = (output / "comparison.md").read_text(encoding="utf-8")
+    assert "| Method | EPE ↓ (px) | Runtime ↓ (s) | FPS ↑ | Dense |" in table
+    assert "| Original Lucas–Kanade |" in table
+    assert "| Optimized pyramidal Lucas–Kanade |" in table
+    assert "| OpenCV Farnebäck |" in table
+    assert table.count("| Yes |") == len(methods)

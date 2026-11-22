@@ -71,8 +71,17 @@ def read_flo(path: Path) -> np.ndarray:
 
 def read_grayscale(path: Path) -> np.ndarray:
     """Decode a frame or mask, including paths with non-ASCII characters."""
+    return _read_image(path, cv2.IMREAD_GRAYSCALE)
+
+
+def read_rgb(path: Path) -> np.ndarray:
+    """Decode a frame in RGB channel order."""
+    return cv2.cvtColor(_read_image(path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+
+def _read_image(path: Path, mode: int) -> np.ndarray:
     data = np.fromfile(path, dtype=np.uint8)
-    image = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE) if data.size else None
+    image = cv2.imdecode(data, mode) if data.size else None
     if image is None:
         raise ValueError(f"Cannot decode image: {path}")
     return image
