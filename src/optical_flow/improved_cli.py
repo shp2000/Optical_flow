@@ -16,6 +16,7 @@ from .improved_compute_flow import flow_lk_pyramid, flow_lk_sparse_pyramid
 from .improved_epipole import epipole_guided
 from .improved_vis_flow import plot_flow_subsampled, plot_sparse_flow
 from .planar_flow import compute_planar_params
+from .video_flow import add_video_arguments, run_video
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir", type=Path, default=Path("outputs/improved")
     )
     parser.add_argument("--no-show", action="store_true")
+    add_video_arguments(parser)
     return parser
 
 
@@ -62,7 +64,18 @@ def _finish_figure(path: Path, no_show: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.video is not None or args.webcam is not None:
+        if args.all or args.plot_flow or args.epipole or args.planar_flow or args.depth:
+            parser.error("select video input or still-image analysis flags")
+        try:
+            run_video(args)
+        except (OSError, RuntimeError, ValueError, cv2.error) as error:
+            parser.exit(1, f"Video processing failed: {error}\n")
+        return
+    if args.output_video is not None:
+        parser.error("--output-video requires --video or --webcam")
     if args.all:
         args.plot_flow = args.epipole = args.depth = args.planar_flow = True
     args.output_dir.mkdir(parents=True, exist_ok=True)

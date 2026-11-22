@@ -72,6 +72,37 @@ include `--levels`, `--iterations`, `--window-size`, `--plot-step`, and
 `--max-ransac-points`. After installation, the same pipeline is available as
 `optical-flow-improved`.
 
+## Video and webcam
+
+Pass a video file to the optimized entry point. It processes consecutive frames
+in order and writes a side-by-side MP4 showing the input, HSV flow, and processing FPS.
+The first frame has a blank flow panel. Each subsequent panel shows motion from
+the previous frame to the displayed frame.
+
+```bash
+python improved_main.py --video input.mp4 --output-video outputs/flow.mp4
+```
+
+Use `--preview` to open a window for a video file. `--webcam` opens camera `0`
+with a preview, and `--webcam 1` selects camera `1`. Press `q` or `Esc` to
+finish recording and save the processed frames. Use `--no-show` for headless
+capture, `Ctrl+C` to finish from the terminal, or `--max-frames` to stop automatically.
+
+```bash
+python improved_main.py --webcam --width 480 --max-frames 300 --output-video outputs/webcam-flow.mp4
+```
+
+- `--width` or `--height` preserves the input aspect ratio when used alone.
+  Specify both for an exact processing size.
+- `--device auto` selects CUDA RAFT Small when CUDA-enabled PyTorch and
+  Torchvision are available, with pyramidal Lucas–Kanade as the CPU fallback.
+  Use `--device cpu` to select Lucas–Kanade or `--device cuda` to require CUDA.
+  Install the optional `raft` extra for the RAFT backend. The first CUDA run
+  downloads the pretrained model weights. [PyTorch installation](https://pytorch.org/get-started/locally/)
+- The MP4 contains the annotated video frames. It uses the source playback rate
+  when available and 30 FPS otherwise. Use `--output-fps` to override playback
+  speed. The FPS overlay measures processing throughput.
+
 ## Visual diagnostics
 
 Pass two or more images in chronological order to compare each consecutive pair
