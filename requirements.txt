@@ -1,6 +1,7 @@
 numpy
 matplotlib
 opencv-python
+Pillow>=9.1
 seaborn
 scipy
 tqdm

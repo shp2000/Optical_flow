@@ -72,6 +72,34 @@ include `--levels`, `--iterations`, `--window-size`, `--plot-step`, and
 `--max-ransac-points`. After installation, the same pipeline is available as
 `optical-flow-improved`.
 
+## Visual diagnostics
+
+Pass two or more images in chronological order to compare each consecutive pair
+using dense pyramidal Lucas–Kanade. The command also works as
+`optical-flow-diagnostics` after installation.
+
+```bash
+python -m optical_flow.diagnostics_cli data/frames/insight20.png data/frames/insight21.png data/frames/insight22.png
+```
+
+Each `outputs/diagnostics/pair_*/overview.png` puts the inputs, reconstructed
+reference, flow, residuals, confidence, and consistency mask side by side.
+The pair directory also contains individual PNGs for flow, reconstruction,
+warp residual, confidence, and consistency. `reconstruction.gif` alternates
+the reference and reconstruction for each pair. Use `--no-gif` for stills only.
+
+- **HSV flow** uses hue for direction and brightness for magnitude. Set
+  `--flow-max` to change the motion magnitude at full brightness (10 pixels by default).
+- **Warp residual** shows the mean absolute RGB difference per pixel. Reconstruction
+  samples the next frame at each reference pixel plus its estimated displacement.
+  Both residual panels use the same color scale (`--residual-max`, default 32 intensity levels)
+  and report MAE over the same in-bounds pixels. Slate gray marks unavailable samples.
+- **Confidence** shows the minimum eigenvalue of the local structure tensor.
+  Each pair uses its own 99th-percentile display maximum and a square-root scale.
+- **Consistency** flags pixels where following the forward and backward flow
+  misses the starting point by more than `--fb-threshold` (1 pixel by default).
+  The mask distinguishes inconsistent motion from coordinates outside the next frame.
+
 ## Quantitative benchmark
 
 Download `other-color-twoframes.zip` (or `other-gray-twoframes.zip`) and
