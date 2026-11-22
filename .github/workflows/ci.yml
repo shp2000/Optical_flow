@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project
+        run: python -m pip install ".[dev]"
+      - name: Smoke-test CLI
+        run: |
+          python main.py --help
+          python -m optical_flow --help
+          python improved_main.py --help
+          python -m optical_flow.improved_cli --help
+      - name: Run tests
+        run: pytest
